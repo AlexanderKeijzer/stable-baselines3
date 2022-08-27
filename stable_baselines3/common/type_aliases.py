@@ -47,6 +47,15 @@ class ReplayBufferSamples(NamedTuple):
     rewards: th.Tensor
 
 
+class PERReplayBufferSamples(NamedTuple):
+    observations: th.Tensor
+    actions: th.Tensor
+    next_observations: th.Tensor
+    dones: th.Tensor
+    rewards: th.Tensor
+    idxs: np.ndarray
+
+
 class DictReplayBufferSamples(ReplayBufferSamples):
     observations: TensorDict
     actions: th.Tensor

@@ -272,6 +272,15 @@ class SAC(OffPolicyAlgorithm):
             actor_loss.backward()
             self.actor.optimizer.step()
 
+            # Update buffer priorities
+            if self.replay_buffer.update_priorities:
+                min_current_q_values, _ = th.min(
+                    th.cat(current_q_values, dim=1), dim=1, keepdim=True)
+                td_error = (target_q_values -
+                            min_current_q_values).detach().cpu().numpy()
+                self.replay_buffer.update_priorities(
+                    replay_data.idxs, np.abs(td_error))
+
             # Update target networks
             if gradient_step % self.target_update_interval == 0:
                 polyak_update(self.critic.parameters(), self.critic_target.parameters(), self.tau)
