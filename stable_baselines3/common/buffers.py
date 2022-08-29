@@ -783,7 +783,7 @@ class DictRolloutBuffer(RolloutBuffer):
 
 class PERReplayBuffer(ReplayBuffer):
     """
-    Replay buffer used in off-policy algorithms like SAC/TD3.
+    Replay buffer used in off-policy algorithms like SAC/TD3 with prioritization.
 
     :param buffer_size: Max number of element in the buffer
     :param observation_space: Observation space
@@ -811,12 +811,16 @@ class PERReplayBuffer(ReplayBuffer):
         optimize_memory_usage: bool = False,
         handle_timeout_termination: bool = True,
         eps: float = 0.01,
+        alpha: float = 0.1,
+        beta: float = 0.1,
     ):
         super().__init__(buffer_size, observation_space, action_space, device, n_envs, optimize_memory_usage, handle_timeout_termination)
 
         self.tree = SumTree(self.buffer_size * self.n_envs)
 
         self.eps = eps
+        self.alpha = alpha
+        self.beta = beta  # Not yet implemented
         self.max_priority = eps
 
     def add(
@@ -851,7 +855,7 @@ class PERReplayBuffer(ReplayBuffer):
         self.dones[self.pos] = np.array(done).copy()
 
         for i in range(self.n_envs):
-            self.tree.add(self.max_priority, self.pos*self.n_envs + i)
+            self.tree.add(self.max_priority, self.pos * self.n_envs + i)
 
         if self.handle_timeout_termination:
             self.timeouts[self.pos] = np.array([info.get("TimeLimit.truncated", False) for info in infos])
@@ -861,7 +865,7 @@ class PERReplayBuffer(ReplayBuffer):
             self.full = True
             self.pos = 0
 
-    def sample(self, batch_size: int, env: Optional[VecNormalize] = None) -> PERReplayBufferSamples:
+    def sample(self, batch_size: int, env: Optional[VecNormalize] = None, use_prio: bool = True) -> PERReplayBufferSamples:
         """
         Sample elements from the replay buffer.
         Custom sampling when using memory efficient variant,
@@ -873,15 +877,21 @@ class PERReplayBuffer(ReplayBuffer):
             to normalize the observations/rewards when sampling
         :return:
         """
-        if not self.optimize_memory_usage:
-            return super().sample(batch_size=batch_size, env=env)
-        # Do not sample the element with index `self.pos` as the transitions is invalid
-        # (we use only one array to store `obs` and `next_obs`)
-        if self.full:
-            batch_inds = (np.random.randint(1, self.buffer_size, size=batch_size) + self.pos) % self.buffer_size
+        if use_prio:
+            cumsums = np.random.uniform(0, self.tree.total, size=batch_size)
+            batch_inds = np.empty(batch_size, dtype=np.int32)
+            for i, cumsum in enumerate(cumsums):
+                _, priority, batch_inds[i] = self.tree.get(cumsum)
+
+                # In the rare case we take pos, redraw until we get not pos
+                if self.optimize_memory_usage:
+                    while batch_inds[i] == self.pos:
+                        cumsum = np.random.uniform(0, self.tree.total)
+                        _, priority, batch_inds[i] = self.tree.get(cumsum)
+
+            return self._get_samples(batch_inds, env=env)
         else:
-            batch_inds = np.random.randint(0, self.pos, size=batch_size)
-        return self._get_samples(batch_inds, env=env)
+            return super().sample(batch_size, env=env)
 
     def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> PERReplayBufferSamples:
         # Sample randomly the env idx
@@ -910,6 +920,7 @@ class PERReplayBuffer(ReplayBuffer):
         :param batch_inds: indices of sampled transitions
         :param priorities: TD errors
         """
-        for idx, priority in zip(batch_inds, priorities):
-            self.tree.update(idx, priority + self.eps)
+        for idx, priority in zip(batch_inds, priorities.squeeze()):
+            priority = (priority + self.eps) ** self.alpha
+            self.tree.update(idx, priority)
             self.max_priority = max(self.max_priority, priority)
