@@ -893,7 +893,7 @@ class PERReplayBuffer(ReplayBuffer):
         else:
             return super().sample(batch_size, env=env)
 
-    def get_previous_step(self, idxs: np.ndarray) -> PERReplayBufferSamples:
+    def get_next_step(self, idxs: np.ndarray) -> PERReplayBufferSamples:
         """
         Get the previous step of the replay buffer.
 
@@ -901,7 +901,7 @@ class PERReplayBuffer(ReplayBuffer):
         :return: The previous step of the replay buffer
         """
         # TODO: Disallow wraparound?
-        batch_inds = ((idxs // self.n_envs) - 1) % self.buffer_size
+        batch_inds = ((idxs // self.n_envs) + 1) % self.buffer_size
         env_inds = idxs % self.n_envs
         return self._get_samples(batch_inds, env_inds)
 
