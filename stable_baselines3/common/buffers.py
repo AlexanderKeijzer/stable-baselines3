@@ -893,9 +893,22 @@ class PERReplayBuffer(ReplayBuffer):
         else:
             return super().sample(batch_size, env=env)
 
-    def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> PERReplayBufferSamples:
+    def get_previous_step(self, idxs: np.ndarray) -> PERReplayBufferSamples:
+        """
+        Get the previous step of the replay buffer.
+
+        :param idxs: Indices of the samples to get
+        :return: The previous step of the replay buffer
+        """
+        # TODO: Disallow wraparound?
+        batch_inds = ((idxs // self.n_envs) - 1) % self.buffer_size
+        env_inds = idxs % self.n_envs
+        return self._get_samples(batch_inds, env_inds)
+
+    def _get_samples(self, batch_inds: np.ndarray, env_indices: np.ndarray = None, env: Optional[VecNormalize] = None) -> PERReplayBufferSamples:
         # Sample randomly the env idx
-        env_indices = np.random.randint(0, high=self.n_envs, size=(len(batch_inds),))
+        if not env_indices:
+            env_indices = np.random.randint(0, high=self.n_envs, size=(len(batch_inds),))
 
         if self.optimize_memory_usage:
             next_obs = self._normalize_obs(self.observations[(batch_inds + 1) % self.buffer_size, env_indices, :], env)
