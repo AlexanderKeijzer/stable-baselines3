@@ -600,3 +600,9 @@ class StopTrainingOnNoModelImprovement(BaseCallback):
             )
 
         return continue_training
+
+
+class GradientCallback(BaseCallback):
+
+    def _on_gradient_step(self):
+        pass

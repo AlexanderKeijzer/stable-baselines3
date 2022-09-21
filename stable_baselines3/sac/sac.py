@@ -6,6 +6,7 @@ import torch as th
 from torch.nn import functional as F
 
 from stable_baselines3.common.buffers import ReplayBuffer
+from stable_baselines3.common.callbacks import BaseCallback, GradientCallback
 from stable_baselines3.common.noise import ActionNoise
 from stable_baselines3.common.off_policy_algorithm import OffPolicyAlgorithm
 from stable_baselines3.common.policies import BasePolicy
@@ -189,7 +190,7 @@ class SAC(OffPolicyAlgorithm):
         self.critic = self.policy.critic
         self.critic_target = self.policy.critic_target
 
-    def train(self, gradient_steps: int, batch_size: int = 64) -> None:
+    def train(self, gradient_steps: int, batch_size: int = 64, callback: BaseCallback = None) -> None:
         # Switch to train mode (this affects batch norm / dropout)
         self.policy.set_training_mode(True)
         # Update optimizers learning rate
@@ -273,7 +274,7 @@ class SAC(OffPolicyAlgorithm):
             self.actor.optimizer.step()
 
             # Update buffer priorities
-            if self.replay_buffer.update_priorities:
+            if hasattr(self.replay_buffer, 'update_priorities'):
                 min_current_q_values, _ = th.min(
                     th.cat(current_q_values, dim=1), dim=1, keepdim=True)
                 td_error = (target_q_values -
@@ -286,6 +287,11 @@ class SAC(OffPolicyAlgorithm):
                 polyak_update(self.critic.parameters(), self.critic_target.parameters(), self.tau)
                 # Copy running stats, see GH issue #996
                 polyak_update(self.batch_norm_stats, self.batch_norm_stats_target, 1.0)
+
+            # Call callback
+            if isinstance(callback, GradientCallback):
+                callback.update_locals(locals())
+                callback._on_gradient_step()
 
         self._n_updates += gradient_steps
 

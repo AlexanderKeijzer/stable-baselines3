@@ -363,13 +363,13 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 gradient_steps = self.gradient_steps if self.gradient_steps >= 0 else rollout.episode_timesteps
                 # Special case when the user passes `gradient_steps=0`
                 if gradient_steps > 0:
-                    self.train(batch_size=self.batch_size, gradient_steps=gradient_steps)
+                    self.train(batch_size=self.batch_size, gradient_steps=gradient_steps, callback=callback)
 
         callback.on_training_end()
 
         return self
 
-    def train(self, gradient_steps: int, batch_size: int) -> None:
+    def train(self, gradient_steps: int, batch_size: int, callback: BaseCallback) -> None:
         """
         Sample the replay buffer and do the updates
         (gradient descent and update target networks)
