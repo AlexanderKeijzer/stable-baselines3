@@ -128,7 +128,8 @@ class IESAC(SAC):
             log_prob_prio = None
 
             with th.no_grad():
-                needs_next_step = np.ones_like(replay_data.idxs, dtype=bool)
+                needs_next_step = th.ones_like(replay_data.observations, dtype=bool)
+                ends_this_step = th.zeros_like(replay_data.observations, dtype=bool)
                 next_obs = replay_data.next_observations
                 rewards = replay_data.rewards
                 dones = replay_data.dones
@@ -149,15 +150,19 @@ class IESAC(SAC):
                             log_prob_prio = det_log_prob
                         if entropy_target is None:
                             # Compute entropy target, entropy should be lower than bootstrap_entropy percentile of the batch
-                            entropy_target = np.percentile(det_log_prob.detach().cpu().numpy(), self.bootstrap_entropy * 100)
+                            entropy_target = np.percentile(det_log_prob.cpu().numpy(), self.bootstrap_entropy * 100)
 
                         # Is entropy too high in the current step index
-                        batch_next_step = det_log_prob > entropy_target & ~dones
+                        batch_next_step = (det_log_prob > entropy_target) & ~dones.flatten().bool()
                         # Is entropy too high in the initial step index
-                        needs_next_step[needs_next_step] = batch_next_step
+                        ends_this_step.zero_()
+                        ends_this_step[needs_next_step] = ~batch_next_step
+                        needs_next_step[needs_next_step.clone()] = batch_next_step
                     else:
-                        batch_next_step = np.zeros_like(idxs, dtype=bool)
-                        needs_next_step.fill(False)
+                        batch_next_step = th.zeros_like(next_obs, dtype=bool).squeeze()
+                        ends_this_step.zero_()
+                        ends_this_step[needs_next_step] = True
+                        needs_next_step.zero_()
 
                     # Q-Function accurate -> bootstrap to critic
 
@@ -170,19 +175,19 @@ class IESAC(SAC):
                     # add entropy term
                     next_q_values = next_q_values - ent_coef * next_log_prob.reshape(-1, 1)
                     # td error + entropy term
-                    # BUG: I NEED ONLY THE NOT NEEDS NEXT STEP FOR THE CURRENT BATCH HERE OR WE KEEP BOOTSTRAPPING EVERY TIME
-                    target_q_values[~needs_next_step] += (1 - dones) * self.gamma ** step * next_q_values
+                    target_q_values[ends_this_step] += ((
+                        1 - dones[~batch_next_step]) * self.gamma ** step * next_q_values).squeeze()
 
                     # Q-Function inaccurate -> add next reward and continue
 
                     # Get data for the next step
-                    new_data = self.replay_buffer.get_next_step(idxs[batch_next_step])
+                    new_data = self.replay_buffer.get_next_step(idxs[batch_next_step.cpu().numpy()])
                     next_obs = new_data.next_observations
                     rewards = new_data.rewards
                     dones = new_data.dones
                     idxs = new_data.idxs
                     # Add discounted reward to target and continue
-                    target_q_values[needs_next_step] += self.gamma ** step * rewards
+                    target_q_values[needs_next_step] += (self.gamma ** step * rewards).squeeze()
 
                     step += 1
 

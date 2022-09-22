@@ -907,7 +907,7 @@ class PERReplayBuffer(ReplayBuffer):
 
     def _get_samples(self, batch_inds: np.ndarray, env_indices: np.ndarray = None, env: Optional[VecNormalize] = None) -> PERReplayBufferSamples:
         # Sample randomly the env idx
-        if not env_indices:
+        if env_indices is None:
             env_indices = np.random.randint(0, high=self.n_envs, size=(len(batch_inds),))
 
         if self.optimize_memory_usage:
