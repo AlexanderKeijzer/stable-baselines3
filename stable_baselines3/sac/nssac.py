@@ -122,8 +122,6 @@ class NSSAC(SAC):
                 ent_coef_loss.backward()
                 self.ent_coef_optimizer.step()
 
-            log_prob_prio = None
-
             with th.no_grad():
                 new_data = replay_data
                 target_q_values = new_data.rewards
@@ -167,13 +165,6 @@ class NSSAC(SAC):
             self.actor.optimizer.zero_grad()
             actor_loss.backward()
             self.actor.optimizer.step()
-
-            # Update buffer priorities
-            log_prob_prio = log_prob_prio.detach().cpu().numpy()
-            # Shift logprob from -1 to inf to 0 to inf
-            log_prob_prio = np.log(1 + np.exp(log_prob_prio))
-            self.replay_buffer.update_priorities(
-                replay_data.idxs, log_prob_prio)
 
             # Update target networks
             if gradient_step % self.target_update_interval == 0:
