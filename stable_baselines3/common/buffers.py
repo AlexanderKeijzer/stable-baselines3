@@ -294,9 +294,22 @@ class ReplayBuffer(BaseBuffer):
             batch_inds = np.random.randint(0, self.pos, size=batch_size)
         return self._get_samples(batch_inds, env=env)
 
-    def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> ReplayBufferSamples:
+    def get_next_step(self, idxs: np.ndarray) -> Union[ReplayBufferSamples, PERReplayBufferSamples]:
+        """
+        Get the next step of the replay buffer.
+
+        :param idxs: Indices of the samples to get the next step of
+        :return: The next step of the replay buffer
+        """
+        # TODO: Disallow wraparound?
+        batch_inds = ((idxs // self.n_envs) + 1) % self.buffer_size
+        env_inds = idxs % self.n_envs
+        return self._get_samples(batch_inds, env_inds)
+
+    def _get_samples(self, batch_inds: np.ndarray, env_indices: np.ndarray = None, env: Optional[VecNormalize] = None) -> ReplayBufferSamples:
         # Sample randomly the env idx
-        env_indices = np.random.randint(0, high=self.n_envs, size=(len(batch_inds),))
+        if env_indices is None:
+            env_indices = np.random.randint(0, high=self.n_envs, size=(len(batch_inds),))
 
         if self.optimize_memory_usage:
             next_obs = self._normalize_obs(self.observations[(batch_inds + 1) % self.buffer_size, env_indices, :], env)
@@ -892,18 +905,6 @@ class PERReplayBuffer(ReplayBuffer):
             return self._get_samples(batch_inds, env=env)
         else:
             return super().sample(batch_size, env=env)
-
-    def get_next_step(self, idxs: np.ndarray) -> PERReplayBufferSamples:
-        """
-        Get the previous step of the replay buffer.
-
-        :param idxs: Indices of the samples to get
-        :return: The previous step of the replay buffer
-        """
-        # TODO: Disallow wraparound?
-        batch_inds = ((idxs // self.n_envs) + 1) % self.buffer_size
-        env_inds = idxs % self.n_envs
-        return self._get_samples(batch_inds, env_inds)
 
     def _get_samples(self, batch_inds: np.ndarray, env_indices: np.ndarray = None, env: Optional[VecNormalize] = None) -> PERReplayBufferSamples:
         # Sample randomly the env idx
