@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Dict, List, Optional, Tuple, Type, Union, Callable
 from stable_baselines3.sac.policies import SACPolicy
 from stable_baselines3.common.type_aliases import GymEnv, Schedule
 from stable_baselines3.common.buffers import PERReplayBuffer
@@ -37,8 +37,9 @@ class IESAC(SAC):
         use_sde: bool = False,
         sde_sample_freq: int = -1,
         use_sde_at_warmup: bool = False,
-        bootstap_entropy: float = 0.25,
+        bootstap_percentile: float = 0.75,
         max_bootstrap=10,
+        prio_overwrite_func: Optional[Callable[[th.Tensor], np.ndarray]] = None,
         tensorboard_log: Optional[str] = None,
         create_eval_env: bool = False,
         policy_kwargs: Optional[Dict[str, Any]] = None,
@@ -76,8 +77,9 @@ class IESAC(SAC):
             device=device,
             _init_setup_model=_init_setup_model,
         )
-        self.bootstrap_entropy = bootstap_entropy
+        self.bootstrap_percentile = bootstap_percentile
         self.max_bootstrap = max_bootstrap
+        self.prio_overwrite_func = prio_overwrite_func
 
     def train(self, gradient_steps: int, batch_size: int = 64, callback: BaseCallback = None) -> None:
         # Switch to train mode (this affects batch norm / dropout)
@@ -125,7 +127,7 @@ class IESAC(SAC):
                 ent_coef_loss.backward()
                 self.ent_coef_optimizer.step()
 
-            log_prob_prio = None
+            bootstrap_distance = th.zeros_like(replay_data.observations, dtype=th.int8)
 
             with th.no_grad():
                 needs_next_step = th.ones_like(replay_data.observations, dtype=bool)
@@ -135,7 +137,7 @@ class IESAC(SAC):
                 dones = replay_data.dones
                 idxs = replay_data.idxs
                 step = 1
-                entropy_target = None
+                log_prob_target = None
 
                 target_q_values = replay_data.rewards
 
@@ -146,14 +148,12 @@ class IESAC(SAC):
                         action = self.actor.forward(next_obs, deterministic=True)
                         det_log_prob = self.actor.action_dist.log_prob(
                             action, self.actor.action_dist.gaussian_actions)
-                        if log_prob_prio is None:
-                            log_prob_prio = det_log_prob
-                        if entropy_target is None:
+                        if log_prob_target is None:
                             # Compute entropy target, entropy should be lower than bootstrap_entropy percentile of the batch
-                            entropy_target = np.percentile(det_log_prob.cpu().numpy(), self.bootstrap_entropy * 100)
+                            log_prob_target = np.percentile(det_log_prob.cpu().numpy(), self.bootstrap_percentile * 100)
 
                         # Is entropy too high in the current step index
-                        batch_next_step = (det_log_prob > entropy_target) & ~dones.flatten().bool()
+                        batch_next_step = (det_log_prob < log_prob_target) & ~dones.flatten().bool()
                         # Is entropy too high in the initial step index
                         ends_this_step.zero_()
                         ends_this_step[needs_next_step] = ~batch_next_step
@@ -177,6 +177,7 @@ class IESAC(SAC):
                     # td error + entropy term
                     target_q_values[ends_this_step] += ((
                         1 - dones[~batch_next_step]) * self.gamma ** step * next_q_values).squeeze()
+                    bootstrap_distance[ends_this_step] = step
 
                     # Q-Function inaccurate -> add next reward and continue
 
@@ -218,11 +219,18 @@ class IESAC(SAC):
             self.actor.optimizer.step()
 
             # Update buffer priorities
-            log_prob_prio = log_prob_prio.detach().cpu().numpy()
-            # Shift logprob from -1 to inf to 0 to inf
-            log_prob_prio = np.log(1 + np.exp(log_prob_prio))
-            self.replay_buffer.update_priorities(
-                replay_data.idxs, log_prob_prio)
+            with th.no_grad():
+                if self.prio_overwrite_func is None:
+                    action = self.actor.forward(replay_data.observations, deterministic=True)
+                    log_prob_prio = self.actor.action_dist.log_prob(
+                        action, self.actor.action_dist.gaussian_actions)
+                    log_prob_prio = log_prob_prio.cpu().numpy()
+                    # Shift logprob from -1 to inf to 0 to inf
+                    log_prob_prio = np.log(1 + np.exp(log_prob_prio))
+                else:
+                    log_prob_prio = self.prio_overwrite_func(replay_data.observations)
+                self.replay_buffer.update_priorities(
+                    replay_data.idxs, log_prob_prio)
 
             # Update target networks
             if gradient_step % self.target_update_interval == 0:
