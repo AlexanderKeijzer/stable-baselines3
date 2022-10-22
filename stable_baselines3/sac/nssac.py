@@ -124,11 +124,13 @@ class NSSAC(SAC):
 
             with th.no_grad():
                 new_data = replay_data
+                dones = replay_data.dones
                 target_q_values = new_data.rewards
 
                 for i in range(1, self.n_steps + 1):
                     new_data = self.replay_buffer.get_next_step(new_data.idxs)
-                    target_q_values += self.gamma ** i * new_data.rewards
+                    target_q_values += (1 - dones) * self.gamma ** i * new_data.rewards
+                    dones = dones.maximum(new_data.dones)
 
                 # Select action according to policy
                 next_actions, next_log_prob = self.actor.action_log_prob(new_data.next_observations)
@@ -138,7 +140,7 @@ class NSSAC(SAC):
                 # add entropy term
                 next_q_values = next_q_values - ent_coef * next_log_prob.reshape(-1, 1)
                 # td error + entropy term
-                target_q_values += (1 - new_data.dones) * self.gamma ** (self.n_steps + 1) * next_q_values
+                target_q_values += (1 - dones) * self.gamma ** (self.n_steps + 1) * next_q_values
 
             # Get current Q-values estimates for each critic network
             # using action from the replay buffer
