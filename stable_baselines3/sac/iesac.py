@@ -40,6 +40,8 @@ class IESAC(SAC):
         bootstap_percentile: float = 0.75,
         max_bootstrap=10,
         prio_overwrite_func: Optional[Callable[[th.Tensor], np.ndarray]] = None,
+        bootstrap_overwrite_func: Optional[Callable[[th.Tensor], th.Tensor]] = None,
+        bootstrap_target_overwrite: Optional[float] = None,
         tensorboard_log: Optional[str] = None,
         create_eval_env: bool = False,
         policy_kwargs: Optional[Dict[str, Any]] = None,
@@ -80,6 +82,8 @@ class IESAC(SAC):
         self.bootstrap_percentile = bootstap_percentile
         self.max_bootstrap = max_bootstrap
         self.prio_overwrite_func = prio_overwrite_func
+        self.bootstrap_overwrite_func = bootstrap_overwrite_func
+        self.bootstrap_target_overwrite = bootstrap_target_overwrite
 
     def train(self, gradient_steps: int, batch_size: int = 64, callback: BaseCallback = None) -> None:
         # Switch to train mode (this affects batch norm / dropout)
@@ -137,7 +141,7 @@ class IESAC(SAC):
                 dones = replay_data.dones
                 idxs = replay_data.idxs
                 step = 1
-                log_prob_target = None
+                log_prob_target = self.bootstrap_target_overwrite
 
                 target_q_values = replay_data.rewards
 
@@ -145,9 +149,12 @@ class IESAC(SAC):
 
                     if step < self.max_bootstrap:
                         # Log prob of next observation
-                        action = self.actor.forward(next_obs, deterministic=True)
-                        det_log_prob = self.actor.action_dist.log_prob(
-                            action, self.actor.action_dist.gaussian_actions)
+                        if self.bootstrap_overwrite_func is None:
+                            action = self.actor.forward(next_obs, deterministic=True)
+                            det_log_prob = self.actor.action_dist.log_prob(
+                                action, self.actor.action_dist.gaussian_actions)
+                        else:
+                            det_log_prob = self.bootstrap_overwrite_func(next_obs)
                         if log_prob_target is None:
                             # Compute entropy target, entropy should be lower than bootstrap_entropy percentile of the batch
                             log_prob_target = np.percentile(det_log_prob.cpu().numpy(), self.bootstrap_percentile * 100)
