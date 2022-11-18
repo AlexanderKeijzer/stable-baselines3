@@ -39,8 +39,8 @@ class IESAC(SAC):
         use_sde_at_warmup: bool = False,
         bootstap_percentile: float = 0.75,
         max_bootstrap=10,
-        prio_overwrite_func: Optional[Callable[[th.Tensor], np.ndarray]] = None,
-        bootstrap_overwrite_func: Optional[Callable[[th.Tensor], th.Tensor]] = None,
+        prio_overwrite_func: Optional[Callable[["IESAC", th.Tensor], np.ndarray]] = None,
+        bootstrap_overwrite_func: Optional[Callable[["IESAC", th.Tensor], th.Tensor]] = None,
         bootstrap_target_overwrite: Optional[float] = None,
         tensorboard_log: Optional[str] = None,
         create_eval_env: bool = False,
@@ -131,11 +131,11 @@ class IESAC(SAC):
                 ent_coef_loss.backward()
                 self.ent_coef_optimizer.step()
 
-            bootstrap_distance = th.zeros_like(replay_data.observations, dtype=th.int8)
+            bootstrap_distance = th.zeros_like(replay_data.rewards, dtype=th.int8)
 
             with th.no_grad():
-                needs_next_step = th.ones_like(replay_data.observations, dtype=bool)
-                ends_this_step = th.zeros_like(replay_data.observations, dtype=bool)
+                needs_next_step = th.ones_like(replay_data.rewards, dtype=bool)
+                ends_this_step = th.zeros_like(replay_data.rewards, dtype=bool)
                 next_obs = replay_data.next_observations
                 rewards = replay_data.rewards
                 dones = replay_data.dones
@@ -154,7 +154,7 @@ class IESAC(SAC):
                             det_log_prob = self.actor.action_dist.log_prob(
                                 action, self.actor.action_dist.gaussian_actions)
                         else:
-                            det_log_prob = self.bootstrap_overwrite_func(next_obs)
+                            det_log_prob = self.bootstrap_overwrite_func(self, next_obs)
                         if log_prob_target is None:
                             # Compute entropy target, entropy should be lower than bootstrap_entropy percentile of the batch
                             log_prob_target = np.percentile(det_log_prob.cpu().numpy(), self.bootstrap_percentile * 100)
@@ -166,7 +166,7 @@ class IESAC(SAC):
                         ends_this_step[needs_next_step] = ~batch_next_step
                         needs_next_step[needs_next_step.clone()] = batch_next_step
                     else:
-                        batch_next_step = th.zeros_like(next_obs, dtype=bool).squeeze()
+                        batch_next_step = th.zeros_like(rewards, dtype=bool).squeeze()
                         ends_this_step.zero_()
                         ends_this_step[needs_next_step] = True
                         needs_next_step.zero_()
@@ -235,7 +235,7 @@ class IESAC(SAC):
                     # Shift logprob from -1 to inf to 0 to inf
                     log_prob_prio = np.log(1 + np.exp(log_prob_prio))
                 else:
-                    log_prob_prio = self.prio_overwrite_func(replay_data.observations)
+                    log_prob_prio = self.prio_overwrite_func(self, replay_data.observations)
                 self.replay_buffer.update_priorities(
                     replay_data.idxs, log_prob_prio)
 
