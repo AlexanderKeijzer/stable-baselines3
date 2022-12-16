@@ -195,7 +195,7 @@ class IESAC(SAC):
                     bootstrap_distance[ends_this_step] = step
 
                     if isinstance(self.replay_buffer, CountedReplayBuffer):
-                        self.replay_buffer.increase_count(idxs[~batch_next_step.cpu().numpy()])
+                        self.replay_buffer.increase_count(idxs[~batch_next_step.cpu().numpy()].flatten())
 
                     # Q-Function inaccurate -> add next reward and continue
 
