@@ -301,8 +301,9 @@ class ReplayBuffer(BaseBuffer):
         :param idxs: Indices of the samples to get the next step of
         :return: The next step of the replay buffer
         """
-        # TODO: Disallow wraparound?
-        batch_inds = ((idxs // self.n_envs) + 1) % self.buffer_size
+        batch_inds = (idxs // self.n_envs) + 1
+        # If we're at the end of the trajectory keep same sample
+        batch_inds[batch_inds >= (self.buffer_size if self.full else self.pos)] -= 1
         env_inds = idxs % self.n_envs
         return self._get_samples(batch_inds, env_inds)
 
@@ -938,3 +939,62 @@ class PERReplayBuffer(ReplayBuffer):
             priority = (priority + self.eps) ** self.alpha
             self.tree.update(idx, priority)
             self.max_priority = max(self.max_priority, priority)
+
+
+class CountedReplayBuffer(PERReplayBuffer):
+
+    def __init__(
+        self,
+        buffer_size: int,
+        observation_space: spaces.Space,
+        action_space: spaces.Space,
+        device: Union[th.device, str] = "auto",
+        n_envs: int = 1,
+        optimize_memory_usage: bool = False,
+        handle_timeout_termination: bool = True,
+        alpha: float = 0.1,
+    ):
+        super().__init__(buffer_size, observation_space, action_space, device,
+                         n_envs, optimize_memory_usage, handle_timeout_termination, alpha=alpha)
+        self.total_count = 0
+        self.max_priority = self.count_average()
+
+    def count_average(self):
+        if self.pos == 0:
+            return 1
+        return self.total_count / (self.buffer_size * self.n_envs if self.full else self.pos * self.n_envs)
+
+    def add(
+        self,
+        obs: np.ndarray,
+        next_obs: np.ndarray,
+        action: np.ndarray,
+        reward: np.ndarray,
+        done: np.ndarray,
+        infos: List[Dict[str, Any]],
+    ) -> None:
+        super().add(obs, next_obs, action, reward, done, infos)
+        for i in range(self.n_envs):
+            self.total_count += self.max_priority
+            self.max_priority = self.count_average()
+
+    def update_priorities(self, batch_inds: np.ndarray, priorities: np.ndarray) -> None:
+        pass
+
+    def increase_count(self, batch_inds: np.ndarray) -> None:
+        """
+        Update priorities of sampled transitions.
+
+        :param batch_inds: indices of sampled transitions
+        :param priorities: TD errors
+        """
+        for idx in batch_inds:
+            prio = self.tree.get_prio(idx)
+            increase = self.get_increase()
+            prio += increase
+            self.tree.update(idx, prio)
+            self.total_count += increase
+        self.max_priority = self.count_average()
+
+    def get_increase(self):
+        return 0.25*self.count_average()

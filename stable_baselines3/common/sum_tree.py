@@ -23,6 +23,8 @@ class SumTree:
         return self.nodes[0]
 
     def update(self, data_idx: int, value):
+        assert data_idx <= self.count
+
         idx = data_idx + self.size - 1  # child index in tree array
         change = value - self.nodes[idx]
 
@@ -45,7 +47,7 @@ class SumTree:
 
         idx = 0
         while 2 * idx + 1 < len(self.nodes):
-            left, right = 2*idx + 1, 2*idx + 2
+            left, right = 2 * idx + 1, 2 * idx + 2
 
             if cumsum <= self.nodes[left]:
                 idx = left
@@ -56,6 +58,10 @@ class SumTree:
         data_idx = idx - self.size + 1
 
         return data_idx, self.nodes[idx], self.data[data_idx]
+    
+    def get_prio(self, data_idx):
+        idx = data_idx + self.size - 1
+        return self.nodes[idx]
 
     def __repr__(self):
         return f"SumTree(nodes={self.nodes.__repr__()}, data={self.data.__repr__()})"

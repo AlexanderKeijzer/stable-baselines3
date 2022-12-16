@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Optional, Tuple, Type, Union, Callable
 from stable_baselines3.sac.policies import SACPolicy
 from stable_baselines3.common.type_aliases import GymEnv, Schedule
-from stable_baselines3.common.buffers import PERReplayBuffer
+from stable_baselines3.common.buffers import PERReplayBuffer, CountedReplayBuffer
 from stable_baselines3.common.noise import ActionNoise
 
 from stable_baselines3.sac.sac import SAC
@@ -186,6 +186,9 @@ class IESAC(SAC):
                         1 - dones[~batch_next_step]) * self.gamma ** step * next_q_values).squeeze()
                     bootstrap_distance[ends_this_step] = step
 
+                    if isinstance(self.replay_buffer, CountedReplayBuffer):
+                        self.replay_buffer.increase_count(idxs[~batch_next_step.cpu().numpy()])
+
                     # Q-Function inaccurate -> add next reward and continue
 
                     # Get data for the next step
@@ -226,18 +229,19 @@ class IESAC(SAC):
             self.actor.optimizer.step()
 
             # Update buffer priorities
-            with th.no_grad():
-                if self.prio_overwrite_func is None:
-                    action = self.actor.forward(replay_data.observations, deterministic=True)
-                    log_prob_prio = self.actor.action_dist.log_prob(
-                        action, self.actor.action_dist.gaussian_actions)
-                    log_prob_prio = log_prob_prio.cpu().numpy()
-                    # Shift logprob from -1 to inf to 0 to inf
-                    log_prob_prio = np.log(1 + np.exp(log_prob_prio))
-                else:
-                    log_prob_prio = self.prio_overwrite_func(self, replay_data.observations)
-                self.replay_buffer.update_priorities(
-                    replay_data.idxs, log_prob_prio)
+            if not isinstance(self.replay_buffer, CountedReplayBuffer):
+                with th.no_grad():
+                    if self.prio_overwrite_func is None:
+                        action = self.actor.forward(replay_data.observations, deterministic=True)
+                        log_prob_prio = self.actor.action_dist.log_prob(
+                            action, self.actor.action_dist.gaussian_actions)
+                        log_prob_prio = log_prob_prio.cpu().numpy()
+                        # Shift logprob from -1 to inf to 0 to inf
+                        log_prob_prio = np.log(1 + np.exp(log_prob_prio))
+                    else:
+                        log_prob_prio = self.prio_overwrite_func(self, replay_data.observations)
+                    self.replay_buffer.update_priorities(
+                        replay_data.idxs, log_prob_prio)
 
             # Update target networks
             if gradient_step % self.target_update_interval == 0:
