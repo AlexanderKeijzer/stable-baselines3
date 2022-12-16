@@ -42,6 +42,7 @@ class IESAC(SAC):
         prio_overwrite_func: Optional[Callable[["IESAC", th.Tensor], np.ndarray]] = None,
         bootstrap_overwrite_func: Optional[Callable[["IESAC", th.Tensor], th.Tensor]] = None,
         bootstrap_target_overwrite: Optional[float] = None,
+        separate_entropy_batch: bool = False,
         tensorboard_log: Optional[str] = None,
         create_eval_env: bool = False,
         policy_kwargs: Optional[Dict[str, Any]] = None,
@@ -84,6 +85,7 @@ class IESAC(SAC):
         self.prio_overwrite_func = prio_overwrite_func
         self.bootstrap_overwrite_func = bootstrap_overwrite_func
         self.bootstrap_target_overwrite = bootstrap_target_overwrite
+        self.separate_entropy_batch = separate_entropy_batch
 
     def train(self, gradient_steps: int, batch_size: int = 64, callback: BaseCallback = None) -> None:
         # Switch to train mode (this affects batch norm / dropout)
@@ -100,8 +102,10 @@ class IESAC(SAC):
         actor_losses, critic_losses = [], []
 
         for gradient_step in range(gradient_steps):
-            # Sample replay buffer
-            replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env)
+            # Sample replay buffer (if separate_entropy_batch is True, sample a batch without priorisation
+            # and resample below)
+            replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env,
+                                                    use_prio=not self.separate_entropy_batch)
 
             # We need to sample because `log_std` may have changed between two gradient steps
             if self.use_sde:
@@ -130,6 +134,10 @@ class IESAC(SAC):
                 self.ent_coef_optimizer.zero_grad()
                 ent_coef_loss.backward()
                 self.ent_coef_optimizer.step()
+
+            if self.separate_entropy_batch:
+                # If separate_entropy_batch was true we need to resample the batch with priorisation
+                replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env)
 
             bootstrap_distance = th.zeros_like(replay_data.rewards, dtype=th.int8)
 
