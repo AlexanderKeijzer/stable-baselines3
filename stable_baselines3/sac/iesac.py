@@ -43,6 +43,7 @@ class IESAC(SAC):
         bootstrap_overwrite_func: Optional[Callable[["IESAC", th.Tensor], th.Tensor]] = None,
         bootstrap_target_overwrite: Optional[float] = None,
         separate_entropy_batch: bool = False,
+        bootstrap_to_max: bool = False,
         tensorboard_log: Optional[str] = None,
         create_eval_env: bool = False,
         policy_kwargs: Optional[Dict[str, Any]] = None,
@@ -86,6 +87,10 @@ class IESAC(SAC):
         self.bootstrap_overwrite_func = bootstrap_overwrite_func
         self.bootstrap_target_overwrite = bootstrap_target_overwrite
         self.separate_entropy_batch = separate_entropy_batch
+        self.bootstrap_to_max = bootstrap_to_max
+        if self.bootstrap_to_max:
+            self.index_tensor = th.arange(0, self.max_bootstrap, device=self.device).unsqueeze(
+                1).expand(self.max_bootstrap, batch_size)
 
     def train(self, gradient_steps: int, batch_size: int = 64, callback: BaseCallback = None) -> None:
         # Switch to train mode (this affects batch norm / dropout)
@@ -142,73 +147,111 @@ class IESAC(SAC):
             bootstrap_distance = th.zeros_like(replay_data.rewards, dtype=th.int8)
 
             with th.no_grad():
-                needs_next_step = th.ones_like(replay_data.rewards, dtype=bool)
-                ends_this_step = th.zeros_like(replay_data.rewards, dtype=bool)
-                next_obs = replay_data.next_observations
-                rewards = replay_data.rewards
-                dones = replay_data.dones
-                idxs = replay_data.idxs
-                step = 1
-                log_prob_target = self.bootstrap_target_overwrite
+                if not self.bootstrap_to_max:
+                    needs_next_step = th.ones_like(replay_data.rewards, dtype=bool)
+                    ends_this_step = th.zeros_like(replay_data.rewards, dtype=bool)
+                    next_obs = replay_data.next_observations
+                    rewards = replay_data.rewards
+                    dones = replay_data.dones
+                    idxs = replay_data.idxs
+                    step = 1
+                    log_prob_target = self.bootstrap_target_overwrite
 
-                target_q_values = replay_data.rewards
+                    target_q_values = replay_data.rewards
 
-                while needs_next_step.any():
+                    while needs_next_step.any():
 
-                    if step < self.max_bootstrap:
-                        # Log prob of next observation
-                        if self.bootstrap_overwrite_func is None:
-                            action = self.actor.forward(next_obs, deterministic=True)
-                            det_log_prob = self.actor.action_dist.log_prob(
-                                action, self.actor.action_dist.gaussian_actions)
+                        if step < self.max_bootstrap:
+                            # Log prob of next observation
+                            if self.bootstrap_overwrite_func is None:
+                                action = self.actor.forward(next_obs, deterministic=True)
+                                det_log_prob = self.actor.action_dist.log_prob(
+                                    action, self.actor.action_dist.gaussian_actions)
+                            else:
+                                det_log_prob = self.bootstrap_overwrite_func(self, next_obs)
+                            if log_prob_target is None:
+                                # Compute entropy target, entropy should be lower than bootstrap_entropy percentile of the batch
+                                log_prob_target = np.percentile(det_log_prob.cpu().numpy(), self.bootstrap_percentile * 100)
+
+                            # Is entropy too high in the current step index
+                            batch_next_step = (det_log_prob < log_prob_target) & ~dones.flatten().bool()
+                            # Is entropy too high in the initial step index
+                            ends_this_step.zero_()
+                            ends_this_step[needs_next_step] = ~batch_next_step
+                            needs_next_step[needs_next_step.clone()] = batch_next_step
                         else:
-                            det_log_prob = self.bootstrap_overwrite_func(self, next_obs)
-                        if log_prob_target is None:
-                            # Compute entropy target, entropy should be lower than bootstrap_entropy percentile of the batch
-                            log_prob_target = np.percentile(det_log_prob.cpu().numpy(), self.bootstrap_percentile * 100)
+                            batch_next_step = th.zeros_like(rewards, dtype=bool).squeeze()
+                            ends_this_step.zero_()
+                            ends_this_step[needs_next_step] = True
+                            needs_next_step.zero_()
 
-                        # Is entropy too high in the current step index
-                        batch_next_step = (det_log_prob < log_prob_target) & ~dones.flatten().bool()
-                        # Is entropy too high in the initial step index
-                        ends_this_step.zero_()
-                        ends_this_step[needs_next_step] = ~batch_next_step
-                        needs_next_step[needs_next_step.clone()] = batch_next_step
+                        # Q-Function accurate -> bootstrap to critic
+
+                        next_obs = next_obs[~batch_next_step]
+                        # Select action according to policy
+                        next_actions, next_log_prob = self.actor.action_log_prob(next_obs)
+                        # Compute the next Q values: min over all critics targets
+                        next_q_values = th.cat(self.critic_target(next_obs, next_actions), dim=1)
+                        next_q_values, _ = th.min(next_q_values, dim=1, keepdim=True)
+                        # add entropy term
+                        next_q_values = next_q_values - ent_coef * next_log_prob.reshape(-1, 1)
+                        # td error + entropy term
+                        target_q_values[ends_this_step] += ((
+                            1 - dones[~batch_next_step]) * self.gamma ** step * next_q_values).squeeze()
+                        bootstrap_distance[ends_this_step] = step
+
+                        if isinstance(self.replay_buffer, CountedReplayBuffer):
+                            self.replay_buffer.increase_count(idxs[~batch_next_step.cpu().numpy()].flatten())
+
+                        # Q-Function inaccurate -> add next reward and continue
+
+                        # Get data for the next step
+                        new_data = self.replay_buffer.get_next_step(idxs[batch_next_step.cpu().numpy()])
+                        next_obs = new_data.next_observations
+                        rewards = new_data.rewards
+                        dones = new_data.dones
+                        idxs = new_data.idxs
+                        # Add discounted reward to target and continue
+                        target_q_values[needs_next_step] += (self.gamma ** step * rewards).squeeze()
+
+                        step += 1
+                else:
+                    next_obs = replay_data.next_observations
+                    rewards = replay_data.rewards
+                    dones = replay_data.dones
+                    idxs = replay_data.idxs
+                    for _ in range(self.max_bootstrap - 1):
+                        new_data = self.replay_buffer.get_next_step(idxs)
+                        next_obs = th.cat((next_obs, new_data.next_observations), dim=0)
+                        rewards = th.cat((rewards, new_data.rewards), dim=0)
+                        dones = th.cat((dones, new_data.dones), dim=0)
+                        idxs = new_data.idxs
+
+                    # Log prob of next observation
+                    if self.bootstrap_overwrite_func is None:
+                        action = self.actor.forward(next_obs, deterministic=True)
+                        det_log_prob = self.actor.action_dist.log_prob(
+                            action, self.actor.action_dist.gaussian_actions)
                     else:
-                        batch_next_step = th.zeros_like(rewards, dtype=bool).squeeze()
-                        ends_this_step.zero_()
-                        ends_this_step[needs_next_step] = True
-                        needs_next_step.zero_()
+                        det_log_prob = self.bootstrap_overwrite_func(self, next_obs)
+                    det_log_prob = det_log_prob.reshape(self.max_bootstrap, -1)
+                    max_idx = th.argmax(det_log_prob, dim=0)
+                    selection = self.index_tensor < max_idx
+                    gamma = self.gamma ** th.arange(0, self.max_bootstrap,
+                                                    device=self.device).unsqueeze(1).expand(self.max_bootstrap, batch_size)
+                    discounted_rewards = rewards.reshape(self.max_bootstrap, -1) * gamma
+                    # sum rewards from index - until max_idx - 1
+                    target_q_values = (discounted_rewards * selection).sum(dim=0)
 
-                    # Q-Function accurate -> bootstrap to critic
-
-                    next_obs = next_obs[~batch_next_step]
-                    # Select action according to policy
-                    next_actions, next_log_prob = self.actor.action_log_prob(next_obs)
+                    next_obsservations = next_obs[max_idx]
+                    next_actions, next_log_prob = self.actor.action_log_prob(next_obsservations)
                     # Compute the next Q values: min over all critics targets
-                    next_q_values = th.cat(self.critic_target(next_obs, next_actions), dim=1)
+                    next_q_values = th.cat(self.critic_target(next_obsservations, next_actions), dim=1)
                     next_q_values, _ = th.min(next_q_values, dim=1, keepdim=True)
                     # add entropy term
                     next_q_values = next_q_values - ent_coef * next_log_prob.reshape(-1, 1)
-                    # td error + entropy term
-                    target_q_values[ends_this_step] += ((
-                        1 - dones[~batch_next_step]) * self.gamma ** step * next_q_values).squeeze()
-                    bootstrap_distance[ends_this_step] = step
-
-                    if isinstance(self.replay_buffer, CountedReplayBuffer):
-                        self.replay_buffer.increase_count(idxs[~batch_next_step.cpu().numpy()].flatten())
-
-                    # Q-Function inaccurate -> add next reward and continue
-
-                    # Get data for the next step
-                    new_data = self.replay_buffer.get_next_step(idxs[batch_next_step.cpu().numpy()])
-                    next_obs = new_data.next_observations
-                    rewards = new_data.rewards
-                    dones = new_data.dones
-                    idxs = new_data.idxs
-                    # Add discounted reward to target and continue
-                    target_q_values[needs_next_step] += (self.gamma ** step * rewards).squeeze()
-
-                    step += 1
+                    target_q_values += (1 - dones[max_idx].squeeze()) * self.gamma ** max_idx * next_q_values.squeeze()
+                    target_q_values = target_q_values.unsqueeze(1)
 
             # Get current Q-values estimates for each critic network
             # using action from the replay buffer
