@@ -219,13 +219,13 @@ class IESAC(SAC):
                     next_obs = replay_data.next_observations
                     rewards = replay_data.rewards
                     dones = replay_data.dones
-                    idxs = replay_data.idxs
+                    idxs = replay_data.idxs[:, None]
                     for _ in range(self.max_bootstrap - 1):
-                        new_data = self.replay_buffer.get_next_step(idxs)
+                        new_data = self.replay_buffer.get_next_step(idxs[:, -1])
                         next_obs = th.cat((next_obs, new_data.next_observations), dim=0)
                         rewards = th.cat((rewards, new_data.rewards), dim=0)
                         dones = th.cat((dones, new_data.dones), dim=0)
-                        idxs = new_data.idxs
+                        idxs = np.concatenate((idxs, new_data.idxs[:, None]), axis=1)
 
                     # Log prob of next observation
                     if self.bootstrap_overwrite_func is None:
@@ -243,7 +243,7 @@ class IESAC(SAC):
                     # sum rewards from index - until max_idx - 1
                     target_q_values = (discounted_rewards * selection).sum(dim=0)
 
-                    next_obsservations = next_obs[max_idx]
+                    next_obsservations = th.diagonal(next_obs.reshape(self.max_bootstrap, -1)[max_idx, :]).unsqueeze(1)
                     next_actions, next_log_prob = self.actor.action_log_prob(next_obsservations)
                     # Compute the next Q values: min over all critics targets
                     next_q_values = th.cat(self.critic_target(next_obsservations, next_actions), dim=1)
@@ -252,6 +252,9 @@ class IESAC(SAC):
                     next_q_values = next_q_values - ent_coef * next_log_prob.reshape(-1, 1)
                     target_q_values += (1 - dones[max_idx].squeeze()) * self.gamma ** max_idx * next_q_values.squeeze()
                     target_q_values = target_q_values.unsqueeze(1)
+
+                    if isinstance(self.replay_buffer, CountedReplayBuffer):
+                        self.replay_buffer.increase_count(np.diagonal(idxs[:, max_idx.cpu().numpy()]))
 
             # Get current Q-values estimates for each critic network
             # using action from the replay buffer
