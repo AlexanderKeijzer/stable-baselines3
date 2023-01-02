@@ -117,6 +117,12 @@ class BaseCallback(ABC):
         pass
 
 
+class GradientCallback(BaseCallback):
+
+    def _on_gradient_step(self):
+        pass
+
+
 class EventCallback(BaseCallback):
     """
     Base class for triggering callback on event.
@@ -160,7 +166,7 @@ class EventCallback(BaseCallback):
             self.callback.update_locals(locals_)
 
 
-class CallbackList(BaseCallback):
+class CallbackList(GradientCallback):
     """
     Class for chaining callbacks.
 
@@ -191,6 +197,11 @@ class CallbackList(BaseCallback):
             # Return False (stop training) if at least one callback returns False
             continue_training = callback.on_step() and continue_training
         return continue_training
+
+    def _on_gradient_step(self):
+        for callback in self.callbacks:
+            if isinstance(callback, GradientCallback):
+                callback.on_gradient_step()
 
     def _on_rollout_end(self) -> None:
         for callback in self.callbacks:
@@ -600,9 +611,3 @@ class StopTrainingOnNoModelImprovement(BaseCallback):
             )
 
         return continue_training
-
-
-class GradientCallback(BaseCallback):
-
-    def _on_gradient_step(self):
-        pass
