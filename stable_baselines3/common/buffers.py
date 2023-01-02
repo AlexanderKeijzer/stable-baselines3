@@ -997,4 +997,4 @@ class CountedReplayBuffer(PERReplayBuffer):
         self.max_priority = self.count_average()
 
     def get_increase(self):
-        return 0.25*self.count_average()
+        return self.alpha*self.count_average()
