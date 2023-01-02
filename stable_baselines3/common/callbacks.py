@@ -201,7 +201,7 @@ class CallbackList(GradientCallback):
     def _on_gradient_step(self):
         for callback in self.callbacks:
             if isinstance(callback, GradientCallback):
-                callback.on_gradient_step()
+                callback._on_gradient_step()
 
     def _on_rollout_end(self) -> None:
         for callback in self.callbacks:
