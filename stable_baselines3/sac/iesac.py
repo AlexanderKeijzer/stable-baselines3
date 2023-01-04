@@ -143,6 +143,8 @@ class IESAC(SAC):
             if self.separate_entropy_batch:
                 # If separate_entropy_batch was true we need to resample the batch with priorisation
                 replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env)
+                actions_pi, log_prob = self.actor.action_log_prob(replay_data.observations)
+                log_prob = log_prob.reshape(-1, 1)
 
             bootstrap_distance = th.zeros_like(replay_data.rewards, dtype=th.int8)
 
