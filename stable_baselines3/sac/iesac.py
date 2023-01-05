@@ -173,7 +173,7 @@ class IESAC(SAC):
                                 det_log_prob = self.bootstrap_overwrite_func(self, next_obs)
                             if log_prob_target is None:
                                 # Compute entropy target, entropy should be lower than bootstrap_entropy percentile of the batch
-                                log_prob_target = np.percentile(det_log_prob.cpu().numpy(), self.bootstrap_percentile * 100)
+                                log_prob_target = th.quantile(det_log_prob, self.bootstrap_percentile)
 
                             # Is entropy too high in the current step index
                             batch_next_step = (det_log_prob < log_prob_target) & ~dones.flatten().bool()
