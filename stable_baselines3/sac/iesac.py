@@ -159,7 +159,7 @@ class IESAC(SAC):
                     step = 1
                     log_prob_target = self.bootstrap_target_overwrite
 
-                    target_q_values = replay_data.rewards
+                    target_q_values = replay_data.rewards.clone()
 
                     while needs_next_step.any():
 
