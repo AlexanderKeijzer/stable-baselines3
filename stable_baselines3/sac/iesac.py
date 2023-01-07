@@ -220,13 +220,13 @@ class IESAC(SAC):
                 else:
                     next_obs = replay_data.next_observations
                     rewards = replay_data.rewards
-                    dones = replay_data.dones
+                    dones = replay_data.dones.bool()
                     idxs = replay_data.idxs[:, None]
                     for _ in range(self.max_bootstrap - 1):
                         new_data = self.replay_buffer.get_next_step(idxs[:, -1])
                         next_obs = th.cat((next_obs, new_data.next_observations), dim=0)
                         rewards = th.cat((rewards, new_data.rewards), dim=0)
-                        dones = th.cat((dones, new_data.dones), dim=0)
+                        dones = th.cat((dones, new_data.dones.bool() | dones[:, -1, None]), dim=1)
                         idxs = np.concatenate((idxs, new_data.idxs[:, None]), axis=1)
 
                     # Log prob of next observation
@@ -236,27 +236,30 @@ class IESAC(SAC):
                             action, self.actor.action_dist.gaussian_actions)
                     else:
                         det_log_prob = self.bootstrap_overwrite_func(self, next_obs)
+                    det_log_prob[dones.T.flatten()] = np.inf
                     det_log_prob = det_log_prob.reshape(self.max_bootstrap, -1)
                     max_idx = th.argmax(det_log_prob, dim=0)
-                    selection = self.index_tensor < max_idx
+                    bootstrap_distance = max_idx
+                    selection = self.index_tensor <= max_idx
                     gamma = self.gamma ** th.arange(0, self.max_bootstrap,
                                                     device=self.device).unsqueeze(1).expand(self.max_bootstrap, batch_size)
                     discounted_rewards = rewards.reshape(self.max_bootstrap, -1) * gamma
                     # sum rewards from index - until max_idx - 1
                     target_q_values = (discounted_rewards * selection).sum(dim=0)
 
-                    next_obsservations = th.diagonal(next_obs.reshape(self.max_bootstrap, -1)[max_idx, :]).unsqueeze(1)
-                    next_actions, next_log_prob = self.actor.action_log_prob(next_obsservations)
+                    next_observations = next_obs.reshape(self.max_bootstrap, -1).gather(0, max_idx[None, :]).T
+                    next_actions, next_log_prob = self.actor.action_log_prob(next_observations)
                     # Compute the next Q values: min over all critics targets
-                    next_q_values = th.cat(self.critic_target(next_obsservations, next_actions), dim=1)
+                    next_q_values = th.cat(self.critic_target(next_observations, next_actions), dim=1)
                     next_q_values, _ = th.min(next_q_values, dim=1, keepdim=True)
                     # add entropy term
                     next_q_values = next_q_values - ent_coef * next_log_prob.reshape(-1, 1)
-                    target_q_values += (1 - dones[max_idx].squeeze()) * self.gamma ** max_idx * next_q_values.squeeze()
+                    target_q_values += (1 - dones.float().gather(1,
+                                        max_idx[:, None]).flatten()) * self.gamma ** max_idx * next_q_values.squeeze()
                     target_q_values = target_q_values.unsqueeze(1)
 
                     if isinstance(self.replay_buffer, CountedReplayBuffer):
-                        self.replay_buffer.increase_count(np.diagonal(idxs[:, max_idx.cpu().numpy()]))
+                        self.replay_buffer.increase_count(np.take_along_axis(idxs, max_idx.cpu().numpy()[:, None], 1))
 
             # Get current Q-values estimates for each critic network
             # using action from the replay buffer
