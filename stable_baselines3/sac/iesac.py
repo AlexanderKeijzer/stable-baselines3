@@ -255,7 +255,7 @@ class IESAC(SAC):
                     # add entropy term
                     next_q_values = next_q_values - ent_coef * next_log_prob.reshape(-1, 1)
                     target_q_values += (1 - dones.float().gather(1,
-                                        max_idx[:, None]).flatten()) * self.gamma ** max_idx * next_q_values.squeeze()
+                                        max_idx[:, None]).flatten()) * self.gamma ** (max_idx + 1) * next_q_values.squeeze()
                     target_q_values = target_q_values.unsqueeze(1)
 
                     if isinstance(self.replay_buffer, CountedReplayBuffer):
