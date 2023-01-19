@@ -239,7 +239,7 @@ class IESAC(SAC):
                     det_log_prob[dones.T.flatten()] = np.inf
                     det_log_prob = det_log_prob.reshape(self.max_bootstrap, -1)
                     max_idx = th.argmax(det_log_prob, dim=0)
-                    bootstrap_distance = max_idx
+                    bootstrap_distance = max_idx + 1
                     selection = self.index_tensor <= max_idx
                     gamma = self.gamma ** th.arange(0, self.max_bootstrap,
                                                     device=self.device).unsqueeze(1).expand(self.max_bootstrap, batch_size)
