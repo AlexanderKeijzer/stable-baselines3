@@ -147,6 +147,7 @@ class IESAC(SAC):
                 log_prob = log_prob.reshape(-1, 1)
 
             bootstrap_distance = th.zeros_like(replay_data.rewards, dtype=th.int8)
+            bootstrap_states = th.tensor([], dtype=replay_data.next_observations.dtype, device=self.device)
 
             with th.no_grad():
                 if not self.bootstrap_to_max:
@@ -198,9 +199,11 @@ class IESAC(SAC):
                         # add entropy term
                         next_q_values = next_q_values - ent_coef * next_log_prob.reshape(-1, 1)
                         # td error + entropy term
+                        curr_dones = dones[~batch_next_step]
                         target_q_values[ends_this_step] += ((
-                            1 - dones[~batch_next_step]) * self.gamma ** step * next_q_values).squeeze()
+                            1 - curr_dones) * self.gamma ** step * next_q_values).squeeze()
                         bootstrap_distance[ends_this_step] = step
+                        bootstrap_states = th.cat((bootstrap_states, next_obs[~curr_dones.bool()]), dim=0)
 
                         if isinstance(self.replay_buffer, CountedReplayBuffer):
                             self.replay_buffer.increase_count(idxs[~batch_next_step.cpu().numpy()].flatten())
@@ -239,7 +242,6 @@ class IESAC(SAC):
                     det_log_prob[dones.T.flatten()] = np.inf
                     det_log_prob = det_log_prob.reshape(self.max_bootstrap, -1)
                     max_idx = th.argmax(det_log_prob, dim=0)
-                    bootstrap_distance = max_idx + 1
                     selection = self.index_tensor <= max_idx
                     gamma = self.gamma ** th.arange(0, self.max_bootstrap,
                                                     device=self.device).unsqueeze(1).expand(self.max_bootstrap, batch_size)
@@ -254,9 +256,13 @@ class IESAC(SAC):
                     next_q_values, _ = th.min(next_q_values, dim=1, keepdim=True)
                     # add entropy term
                     next_q_values = next_q_values - ent_coef * next_log_prob.reshape(-1, 1)
-                    target_q_values += (1 - dones.float().gather(1,
-                                        max_idx[:, None]).flatten()) * self.gamma ** (max_idx + 1) * next_q_values.squeeze()
+                    curr_dones = dones.gather(1,
+                                        max_idx[:, None]).flatten()
+                    target_q_values += (1 - curr_dones.float()) * self.gamma ** (max_idx + 1) * next_q_values.squeeze()
                     target_q_values = target_q_values.unsqueeze(1)
+
+                    bootstrap_distance = max_idx + 1
+                    bootstrap_states = next_observations[~curr_dones]
 
                     if isinstance(self.replay_buffer, CountedReplayBuffer):
                         self.replay_buffer.increase_count(np.take_along_axis(idxs, max_idx.cpu().numpy()[:, None], 1))

@@ -142,6 +142,8 @@ class NSSAC(SAC):
                 # td error + entropy term
                 target_q_values += (1 - dones) * self.gamma ** (self.n_steps + 1) * next_q_values
 
+                bootstrap_states = new_data.next_observations[~dones.bool()]
+
             # Get current Q-values estimates for each critic network
             # using action from the replay buffer
             current_q_values = self.critic(replay_data.observations, replay_data.actions)
