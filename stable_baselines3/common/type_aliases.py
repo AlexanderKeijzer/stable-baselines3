@@ -47,12 +47,31 @@ class ReplayBufferSamples(NamedTuple):
     rewards: th.Tensor
 
 
+class BootstrapReplayBufferSamples(NamedTuple):
+    observations: th.Tensor
+    actions: th.Tensor
+    next_observations: th.Tensor
+    dones: th.Tensor
+    rewards: th.Tensor
+    distances: th.Tensor
+
+
 class PERReplayBufferSamples(NamedTuple):
     observations: th.Tensor
     actions: th.Tensor
     next_observations: th.Tensor
     dones: th.Tensor
     rewards: th.Tensor
+    idxs: np.ndarray
+
+
+class PERBootstrapReplayBufferSamples(NamedTuple):
+    observations: th.Tensor
+    actions: th.Tensor
+    next_observations: th.Tensor
+    dones: th.Tensor
+    rewards: th.Tensor
+    distances: th.Tensor
     idxs: np.ndarray
 
 

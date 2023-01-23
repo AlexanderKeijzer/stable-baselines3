@@ -244,8 +244,9 @@ class SAC(OffPolicyAlgorithm):
                 next_q_values, _ = th.min(next_q_values, dim=1, keepdim=True)
                 # add entropy term
                 next_q_values = next_q_values - ent_coef * next_log_prob.reshape(-1, 1)
+                distances = replay_data.distances if hasattr(replay_data, "distances") else 1
                 # td error + entropy term
-                target_q_values = replay_data.rewards + (1 - replay_data.dones) * self.gamma * next_q_values
+                target_q_values = replay_data.rewards + (1 - replay_data.dones) * self.gamma ** distances * next_q_values
 
                 bootstrap_states = replay_data.next_observations[~replay_data.dones.bool()]
 

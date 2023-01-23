@@ -13,6 +13,8 @@ from stable_baselines3.common.type_aliases import (
     ReplayBufferSamples,
     RolloutBufferSamples,
     PERReplayBufferSamples,
+    BootstrapReplayBufferSamples,
+    PERBootstrapReplayBufferSamples,
 )
 from stable_baselines3.common.utils import get_device
 from stable_baselines3.common.vec_env import VecNormalize
@@ -327,6 +329,21 @@ class ReplayBuffer(BaseBuffer):
             self._normalize_reward(self.rewards[batch_inds, env_indices].reshape(-1, 1), env),
         )
         return ReplayBufferSamples(*tuple(map(self.to_torch, data)))
+
+
+class BootstrapReplayBuffer(ReplayBuffer):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.distances = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
+
+    def add(self, obs: np.ndarray, next_obs: np.ndarray, action: np.ndarray, reward: np.ndarray, done: np.ndarray, infos: List[Dict[str, Any]]) -> None:
+        self.distances[self.pos] = np.array([info.get("distance", 1) for info in infos])
+        return super().add(obs, next_obs, action, reward, done, infos)
+
+    def _get_samples(self, batch_inds: np.ndarray, env_indices: np.ndarray = None, env: Optional[VecNormalize] = None) -> BootstrapReplayBufferSamples:
+        data = super()._get_samples(batch_inds, env_indices, env)
+        return BootstrapReplayBufferSamples(*data, self.to_torch(self.distances[batch_inds, env_indices].reshape(-1, 1)))
 
 
 class RolloutBuffer(BaseBuffer):
@@ -867,6 +884,7 @@ class PERReplayBuffer(ReplayBuffer):
         self.actions[self.pos] = np.array(action).copy()
         self.rewards[self.pos] = np.array(reward).copy()
         self.dones[self.pos] = np.array(done).copy()
+        self.distances[self.pos] = np.array([info.get("distance", 1) for info in infos])
 
         for i in range(self.n_envs):
             self.tree.add(self.max_priority, self.pos * self.n_envs + i)
@@ -925,6 +943,7 @@ class PERReplayBuffer(ReplayBuffer):
             # deactivated by default (timeouts is initialized as an array of False)
             (self.dones[batch_inds, env_indices] * (1 - self.timeouts[batch_inds, env_indices])).reshape(-1, 1),
             self._normalize_reward(self.rewards[batch_inds, env_indices].reshape(-1, 1), env),
+            self.distances[batch_inds, env_indices].reshape(-1, 1),
         )
         return PERReplayBufferSamples(*tuple(map(self.to_torch, data)), batch_inds * self.n_envs + env_indices)
 
@@ -939,6 +958,21 @@ class PERReplayBuffer(ReplayBuffer):
             priority = (priority + self.eps) ** self.alpha
             self.tree.update(idx, priority)
             self.max_priority = max(self.max_priority, priority)
+
+
+class PERBootstrapReplayBuffer(PERReplayBuffer):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.distances = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
+
+    def add(self, obs: np.ndarray, next_obs: np.ndarray, action: np.ndarray, reward: np.ndarray, done: np.ndarray, infos: List[Dict[str, Any]]) -> None:
+        self.distances[self.pos] = np.array([info.get("distance", 1) for info in infos])
+        return super().add(obs, next_obs, action, reward, done, infos)
+
+    def _get_samples(self, batch_inds: np.ndarray, env_indices: np.ndarray = None, env: Optional[VecNormalize] = None) -> PERBootstrapReplayBufferSamples:
+        data = super()._get_samples(batch_inds, env_indices, env)
+        return PERBootstrapReplayBufferSamples(*data, self.to_torch(self.distances[batch_inds, env_indices].reshape(-1, 1)))
 
 
 class CountedReplayBuffer(PERReplayBuffer):
@@ -997,4 +1031,4 @@ class CountedReplayBuffer(PERReplayBuffer):
         self.max_priority = self.count_average()
 
     def get_increase(self):
-        return self.alpha*self.count_average()
+        return self.alpha * self.count_average()
