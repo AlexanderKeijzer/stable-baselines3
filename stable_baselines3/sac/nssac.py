@@ -124,12 +124,18 @@ class NSSAC(SAC):
 
             with th.no_grad():
                 new_data = replay_data
+                # Has the trajectory ended?
                 dones = replay_data.dones
+                # Start with targ = r1
                 target_q_values = new_data.rewards
 
+                # Step through the rest of the trajectory
                 for i in range(1, self.n_steps + 1):
+                    # Get the next data in the trajectory
                     new_data = self.replay_buffer.get_next_step(new_data.idxs)
+                    # Add the discounted reward to the target if the last step was not done
                     target_q_values += (1 - dones) * self.gamma ** i * new_data.rewards
+                    # If the current step is done do not add any more rewards by taking the maximum
                     dones = dones.maximum(new_data.dones)
 
                 # Select action according to policy
