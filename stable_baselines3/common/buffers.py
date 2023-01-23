@@ -884,7 +884,6 @@ class PERReplayBuffer(ReplayBuffer):
         self.actions[self.pos] = np.array(action).copy()
         self.rewards[self.pos] = np.array(reward).copy()
         self.dones[self.pos] = np.array(done).copy()
-        self.distances[self.pos] = np.array([info.get("distance", 1) for info in infos])
 
         for i in range(self.n_envs):
             self.tree.add(self.max_priority, self.pos * self.n_envs + i)
@@ -943,7 +942,6 @@ class PERReplayBuffer(ReplayBuffer):
             # deactivated by default (timeouts is initialized as an array of False)
             (self.dones[batch_inds, env_indices] * (1 - self.timeouts[batch_inds, env_indices])).reshape(-1, 1),
             self._normalize_reward(self.rewards[batch_inds, env_indices].reshape(-1, 1), env),
-            self.distances[batch_inds, env_indices].reshape(-1, 1),
         )
         return PERReplayBufferSamples(*tuple(map(self.to_torch, data)), batch_inds * self.n_envs + env_indices)
 
