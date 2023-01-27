@@ -105,6 +105,7 @@ class IESAC(SAC):
 
         ent_coef_losses, ent_coefs = [], []
         actor_losses, critic_losses = [], []
+        min_qf_pis = []
 
         for gradient_step in range(gradient_steps):
             # Sample replay buffer (if separate_entropy_batch is True, sample a batch without priorisation
@@ -222,7 +223,10 @@ class IESAC(SAC):
                         ##############
 
                         # Purely for logging
-                        bootstrap_distance[ends_this_step] = step
+                        dist = th.zeros_like(curr_dones, dtype=th.int8).flatten()
+                        dist[curr_dones.bool().flatten()] = -1
+                        dist[~curr_dones.bool().flatten()] = step
+                        bootstrap_distance[ends_this_step] = dist
                         bootstrap_states = th.cat((bootstrap_states, next_obs[~curr_dones.bool()]), dim=0)
 
                         # Increase count for these indices if we use a counted replay buffer
@@ -300,6 +304,7 @@ class IESAC(SAC):
 
                     # Purely for logging
                     bootstrap_distance = max_idx + 1
+                    bootstrap_distance[curr_dones] = -1
                     bootstrap_states = next_observations[~curr_dones]
 
                     # Increase count for these indices if we use a counted replay buffer
@@ -326,6 +331,7 @@ class IESAC(SAC):
             min_qf_pi, _ = th.min(q_values_pi, dim=1, keepdim=True)
             actor_loss = (ent_coef * log_prob - min_qf_pi).mean()
             actor_losses.append(actor_loss.item())
+            min_qf_pis.append(min_qf_pi.mean().item())
 
             # Optimize the actor
             self.actor.optimizer.zero_grad()
@@ -364,5 +370,6 @@ class IESAC(SAC):
         self.logger.record("train/ent_coef", np.mean(ent_coefs))
         self.logger.record("train/actor_loss", np.mean(actor_losses))
         self.logger.record("train/critic_loss", np.mean(critic_losses))
+        self.logger.record("train/min_qf_pi", np.mean(min_qf_pis))
         if len(ent_coef_losses) > 0:
             self.logger.record("train/ent_coef_loss", np.mean(ent_coef_losses))

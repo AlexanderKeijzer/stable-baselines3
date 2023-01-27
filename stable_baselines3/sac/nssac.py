@@ -89,6 +89,7 @@ class NSSAC(SAC):
 
         ent_coef_losses, ent_coefs = [], []
         actor_losses, critic_losses = [], []
+        min_qf_pis = []
 
         for gradient_step in range(gradient_steps):
             # Sample replay buffer
@@ -170,6 +171,7 @@ class NSSAC(SAC):
             min_qf_pi, _ = th.min(q_values_pi, dim=1, keepdim=True)
             actor_loss = (ent_coef * log_prob - min_qf_pi).mean()
             actor_losses.append(actor_loss.item())
+            min_qf_pis.append(min_qf_pi.mean().item())
 
             # Optimize the actor
             self.actor.optimizer.zero_grad()
@@ -193,5 +195,6 @@ class NSSAC(SAC):
         self.logger.record("train/ent_coef", np.mean(ent_coefs))
         self.logger.record("train/actor_loss", np.mean(actor_losses))
         self.logger.record("train/critic_loss", np.mean(critic_losses))
+        self.logger.record("train/min_qf_pi", np.mean(min_qf_pis))
         if len(ent_coef_losses) > 0:
             self.logger.record("train/ent_coef_loss", np.mean(ent_coef_losses))
