@@ -13,6 +13,7 @@ from stable_baselines3.common.utils import polyak_update
 
 
 class NSSAC(SAC):
+    replay_buffer: PERReplayBuffer
 
     def __init__(
         self,
@@ -27,7 +28,7 @@ class NSSAC(SAC):
         train_freq: Union[int, Tuple[int, str]] = 1,
         gradient_steps: int = 1,
         action_noise: Optional[ActionNoise] = None,
-        replay_buffer_class: Optional[ReplayBuffer] = None,
+        replay_buffer_class: Optional[PERReplayBuffer] = None,
         replay_buffer_kwargs: Optional[Dict[str, Any]] = None,
         optimize_memory_usage: bool = False,
         ent_coef: Union[str, float] = "auto",
@@ -93,7 +94,7 @@ class NSSAC(SAC):
 
         for gradient_step in range(gradient_steps):
             # Sample replay buffer
-            replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env)
+            replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env, use_prio=False)
 
             # We need to sample because `log_std` may have changed between two gradient steps
             if self.use_sde:
@@ -134,8 +135,11 @@ class NSSAC(SAC):
                 for i in range(1, self.n_steps + 1):
                     # Get the next data in the trajectory
                     new_data = self.replay_buffer.get_next_step(new_data.idxs)
+                    # Compute the log prob of the trajectory action
+                    _, traj_log_prob = self.actor.action_log_prob(new_data.observations)
                     # Add the discounted reward to the target if the last step was not done
-                    target_q_values += (1 - dones) * self.gamma ** i * new_data.rewards
+                    target_q_values += (1 - dones) * self.gamma ** i * \
+                        (new_data.rewards - ent_coef * traj_log_prob.reshape(-1, 1))
                     # If the current step is done do not add any more rewards by taking the maximum
                     dones = dones.maximum(new_data.dones)
 

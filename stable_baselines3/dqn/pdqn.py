@@ -8,7 +8,7 @@ from torch.nn import functional as F
 
 from stable_baselines3.common.buffers import PERReplayBuffer, CountedReplayBuffer
 from stable_baselines3.common.callbacks import BaseCallback, GradientCallback
-from stable_baselines3 import DQN
+from stable_baselines3.dqn.dqn import DQN
 from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.preprocessing import maybe_transpose
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
@@ -106,7 +106,7 @@ class PDQN(DQN):
             gamma,
             train_freq,
             gradient_steps,
-            replay_buffer_class,
+            replay_buffer_class if replay_buffer_class else PERReplayBuffer,
             replay_buffer_kwargs,
             optimize_memory_usage,
             target_update_interval,
@@ -154,7 +154,7 @@ class PDQN(DQN):
                 idxs = replay_data.idxs
                 step = 1
                 # The target log prob to allow bootstraps (can be overwritten)
-                log_prob_target = self.bootstrap_target_overwrite
+                sensitivity_target = self.bootstrap_target_overwrite
 
                 # The target q value = r1
                 target_q_values = replay_data.rewards.clone()
@@ -166,19 +166,22 @@ class PDQN(DQN):
                     if step < self.max_bootstrap:
                         # Log prob of next observation
                         if self.bootstrap_overwrite_func is None:
-                            action = self.actor.forward(next_obs, deterministic=True)
-                            det_log_prob = self.actor.action_dist.log_prob(
-                                action, self.actor.action_dist.gaussian_actions)
+                            next_q_values = self.q_net_target(next_obs)
+                            next_q_values = th.sort(next_q_values, dim=1, descending=True)[0]
+                            next_q_values = next_q_values - next_q_values[:, 0:1]
+                            centroid = th.sum(next_q_values * th.linspace(0, 1,
+                                              next_q_values.shape[1], device=self.device), dim=1)
+                            sensitivity = th.exp(centroid)
                         else:
-                            det_log_prob = self.bootstrap_overwrite_func(self, next_obs)
+                            sensitivity = self.bootstrap_overwrite_func(self, next_obs)
 
                         # Only done once for the initial step (or overwitten)
-                        if log_prob_target is None:
+                        if sensitivity_target is None:
                             # Compute entropy target, entropy should be lower than bootstrap_entropy percentile of the batch
-                            log_prob_target = th.quantile(det_log_prob, self.bootstrap_percentile)
+                            sensitivity_target = th.quantile(sensitivity, self.bootstrap_percentile)
 
                         # Is entropy too high in the current step batch index
-                        batch_next_step = (det_log_prob < log_prob_target) & ~dones.flatten().bool()
+                        batch_next_step = (sensitivity < sensitivity_target) & ~dones.flatten().bool()
 
                         # Is entropy too high in the initial batch index
                         ends_this_step.zero_()
@@ -202,7 +205,7 @@ class PDQN(DQN):
                     # STANDARD DQN (except for the discount factor ** step)
                     ##############
                     # Compute the next Q-values using the target network
-                    next_q_values = self.q_net_target(replay_data.next_observations)
+                    next_q_values = self.q_net_target(next_obs)
                     # Follow greedy policy: use the one with the highest value
                     next_q_values, _ = next_q_values.max(dim=1)
                     # Avoid potential broadcast issue
@@ -256,16 +259,15 @@ class PDQN(DQN):
             if not isinstance(self.replay_buffer, CountedReplayBuffer):
                 with th.no_grad():
                     if self.prio_overwrite_func is None:
-                        action = self.actor.forward(replay_data.observations, deterministic=True)
-                        log_prob_prio = self.actor.action_dist.log_prob(
-                            action, self.actor.action_dist.gaussian_actions)
-                        log_prob_prio = log_prob_prio.cpu().numpy()
-                        # Shift logprob from -1 to inf to 0 to inf
-                        log_prob_prio = np.log(1 + np.exp(log_prob_prio))
+                        next_q_values = self.q_net_target(replay_data.observations)
+                        next_q_values = th.sort(next_q_values, dim=1, descending=True)[0]
+                        next_q_values = next_q_values - next_q_values[:, 0:1]
+                        centroid = th.sum(next_q_values * th.linspace(0, 1, next_q_values.shape[1], device=self.device), dim=1)
+                        sensitivity = th.exp(centroid).cpu().numpy()
                     else:
-                        log_prob_prio = self.prio_overwrite_func(self, replay_data.observations)
+                        sensitivity = self.prio_overwrite_func(self, replay_data.observations)
                     self.replay_buffer.update_priorities(
-                        replay_data.idxs, log_prob_prio)
+                        replay_data.idxs, sensitivity)
 
             # Call callback
             if isinstance(callback, GradientCallback):

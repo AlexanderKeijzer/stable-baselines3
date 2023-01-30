@@ -242,8 +242,11 @@ class IESAC(SAC):
                         rewards = new_data.rewards
                         dones = new_data.dones
                         idxs = new_data.idxs
+
+                        _, traj_log_prob = self.actor.action_log_prob(new_data.observations)
                         # Add discounted reward to target and continue
-                        target_q_values[needs_next_step] += (self.gamma ** step * rewards).squeeze()
+                        target_q_values[needs_next_step] += (self.gamma ** step *
+                                                             (rewards - ent_coef * traj_log_prob.reshape(-1, 1))).squeeze()
 
                         step += 1
                 else:
