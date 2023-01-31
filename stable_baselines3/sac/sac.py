@@ -249,7 +249,7 @@ class SAC(OffPolicyAlgorithm):
                 # td error + entropy term
                 target_q_values = replay_data.rewards + (1 - replay_data.dones) * self.gamma ** distances * next_q_values
 
-                bootstrap_states = replay_data.next_observations[~replay_data.dones.bool()]
+                bootstrap_states = replay_data.next_observations[~replay_data.dones.bool().flatten(), :]
 
             # Get current Q-values estimates for each critic network
             # using action from the replay buffer
