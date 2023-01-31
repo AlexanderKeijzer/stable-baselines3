@@ -169,9 +169,8 @@ class PDQN(DQN):
                             next_q_values = self.q_net_target(next_obs)
                             next_q_values = th.sort(next_q_values, dim=1, descending=True)[0]
                             next_q_values = next_q_values - next_q_values[:, 0:1]
-                            centroid = th.sum(next_q_values * th.linspace(0, 1,
-                                              next_q_values.shape[1], device=self.device), dim=1)
-                            sensitivity = th.exp(centroid)
+                            sensitivity = -th.sum(next_q_values * th.linspace(0, 1,
+                                                                              next_q_values.shape[1], device=self.device), dim=1)
                         else:
                             sensitivity = self.bootstrap_overwrite_func(self, next_obs)
 
@@ -262,8 +261,8 @@ class PDQN(DQN):
                         next_q_values = self.q_net_target(replay_data.observations)
                         next_q_values = th.sort(next_q_values, dim=1, descending=True)[0]
                         next_q_values = next_q_values - next_q_values[:, 0:1]
-                        centroid = th.sum(next_q_values * th.linspace(0, 1, next_q_values.shape[1], device=self.device), dim=1)
-                        sensitivity = th.exp(centroid).cpu().numpy()
+                        sensitivity = -th.sum(next_q_values * th.linspace(0, 1,
+                                              next_q_values.shape[1], device=self.device), dim=1).cpu().numpy()
                     else:
                         sensitivity = self.prio_overwrite_func(self, replay_data.observations)
                     self.replay_buffer.update_priorities(
