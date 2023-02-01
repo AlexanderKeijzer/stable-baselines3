@@ -241,8 +241,8 @@ class SquashedDiagGaussianDistribution(DiagGaussianDistribution):
         # Squash the output
         return th.tanh(self.gaussian_actions)
 
-    def log_prob_from_params(self, mean_actions: th.Tensor, log_std: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
-        action = self.actions_from_params(mean_actions, log_std)
+    def log_prob_from_params(self, mean_actions: th.Tensor, log_std: th.Tensor, deterministic: bool = False) -> Tuple[th.Tensor, th.Tensor]:
+        action = self.actions_from_params(mean_actions, log_std, deterministic)
         log_prob = self.log_prob(action, self.gaussian_actions)
         return action, log_prob
 
@@ -591,9 +591,9 @@ class StateDependentNoiseDistribution(Distribution):
         return self.get_actions(deterministic=deterministic)
 
     def log_prob_from_params(
-        self, mean_actions: th.Tensor, log_std: th.Tensor, latent_sde: th.Tensor
+        self, mean_actions: th.Tensor, log_std: th.Tensor, latent_sde: th.Tensor, deterministic: bool = False
     ) -> Tuple[th.Tensor, th.Tensor]:
-        actions = self.actions_from_params(mean_actions, log_std, latent_sde)
+        actions = self.actions_from_params(mean_actions, log_std, latent_sde, deterministic)
         log_prob = self.log_prob(actions)
         return actions, log_prob
 

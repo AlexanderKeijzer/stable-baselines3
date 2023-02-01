@@ -175,9 +175,7 @@ class IESAC(SAC):
                         if step < self.max_bootstrap:
                             # Log prob of next observation
                             if self.bootstrap_overwrite_func is None:
-                                action = self.actor.forward(next_obs, deterministic=True)
-                                det_log_prob = self.actor.action_dist.log_prob(
-                                    action, self.actor.action_dist.gaussian_actions)
+                                _, det_log_prob = self.actor.action_log_prob(next_obs, deterministic=True)
                             else:
                                 det_log_prob = self.bootstrap_overwrite_func(self, next_obs)
 
@@ -265,9 +263,7 @@ class IESAC(SAC):
 
                     # Log prob of next observation
                     if self.bootstrap_overwrite_func is None:
-                        action = self.actor.forward(next_obs, deterministic=True)
-                        det_log_prob = self.actor.action_dist.log_prob(
-                            action, self.actor.action_dist.gaussian_actions)
+                        action, det_log_prob = self.actor.action_log_prob(next_obs, deterministic=True)
                     else:
                         det_log_prob = self.bootstrap_overwrite_func(self, next_obs)
 
@@ -345,9 +341,7 @@ class IESAC(SAC):
             if not isinstance(self.replay_buffer, CountedReplayBuffer):
                 with th.no_grad():
                     if self.prio_overwrite_func is None:
-                        action = self.actor.forward(replay_data.observations, deterministic=True)
-                        log_prob_prio = self.actor.action_dist.log_prob(
-                            action, self.actor.action_dist.gaussian_actions)
+                        _, log_prob_prio = self.actor.action_log_prob(replay_data.observations, deterministic=True)
                         log_prob_prio = log_prob_prio.cpu().numpy()
                         # Shift logprob from -1 to inf to 0 to inf
                         log_prob_prio = np.log(1 + np.exp(log_prob_prio))
