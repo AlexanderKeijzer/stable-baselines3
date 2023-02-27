@@ -23,7 +23,7 @@ class SumTree:
         return self.nodes[0]
 
     def update(self, data_idx: int, value):
-        assert data_idx <= self.count
+        assert data_idx <= self.real_size
 
         idx = data_idx + self.size - 1  # child index in tree array
         change = value - self.nodes[idx]

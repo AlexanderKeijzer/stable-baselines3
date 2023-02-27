@@ -38,12 +38,14 @@ class IESAC(SAC):
         sde_sample_freq: int = -1,
         use_sde_at_warmup: bool = False,
         bootstap_percentile: float = 0.75,
+        bootstrap_percentile_slope: Optional[float] = None,
         max_bootstrap=10,
         prio_overwrite_func: Optional[Callable[["IESAC", th.Tensor], np.ndarray]] = None,
         bootstrap_overwrite_func: Optional[Callable[["IESAC", th.Tensor], th.Tensor]] = None,
         bootstrap_target_overwrite: Optional[float] = None,
         separate_entropy_batch: bool = False,
         bootstrap_to_max: bool = False,
+        no_boot_1step: bool = False,
         tensorboard_log: Optional[str] = None,
         create_eval_env: bool = False,
         policy_kwargs: Optional[Dict[str, Any]] = None,
@@ -82,6 +84,7 @@ class IESAC(SAC):
             _init_setup_model=_init_setup_model,
         )
         self.bootstrap_percentile = bootstap_percentile
+        self.bootstrap_percentile_slope = bootstrap_percentile_slope
         self.max_bootstrap = max_bootstrap
         self.prio_overwrite_func = prio_overwrite_func
         self.bootstrap_overwrite_func = bootstrap_overwrite_func
@@ -91,6 +94,7 @@ class IESAC(SAC):
         if self.bootstrap_to_max:
             self.index_tensor = th.arange(0, self.max_bootstrap, device=self.device).unsqueeze(
                 1).expand(self.max_bootstrap, batch_size)
+        self.no_boot_1step = no_boot_1step
 
     def train(self, gradient_steps: int, batch_size: int = 64, callback: BaseCallback = None) -> None:
         # Switch to train mode (this affects batch norm / dropout)
@@ -102,6 +106,7 @@ class IESAC(SAC):
 
         # Update learning rate according to lr schedule
         self._update_learning_rate(optimizers)
+        bootrap_perc = self.bootstrap_percentile if self.bootstrap_percentile_slope == None else min(self.num_timesteps*self.bootstrap_percentile_slope, self.bootstrap_percentile)
 
         ent_coef_losses, ent_coefs = [], []
         actor_losses, critic_losses = [], []
@@ -148,7 +153,7 @@ class IESAC(SAC):
                 log_prob = log_prob.reshape(-1, 1)
 
             bootstrap_distance = th.zeros_like(replay_data.rewards, dtype=th.int8)
-            bootstrap_states = th.tensor([], dtype=replay_data.next_observations.dtype, device=self.device)
+            bootstrap_states = None
 
             with th.no_grad():
                 if not self.bootstrap_to_max:
@@ -182,7 +187,7 @@ class IESAC(SAC):
                             # Only done once for the initial step (or overwitten)
                             if log_prob_target is None:
                                 # Compute entropy target, entropy should be lower than bootstrap_entropy percentile of the batch
-                                log_prob_target = th.quantile(det_log_prob, self.bootstrap_percentile)
+                                log_prob_target = th.quantile(det_log_prob, bootrap_perc)
 
                             # Is entropy too high in the current step batch index
                             batch_next_step = (det_log_prob < log_prob_target) & ~dones.flatten().bool()
@@ -199,6 +204,11 @@ class IESAC(SAC):
                             ends_this_step.zero_()
                             ends_this_step[needs_next_step] = True
                             needs_next_step.zero_()
+                            if self.no_boot_1step:
+                                step = 1
+                                next_obs = replay_data.next_observations[ends_this_step, None]
+                                dones = replay_data.dones[ends_this_step, None]
+                                target_q_values[ends_this_step] = replay_data.rewards[ends_this_step]
 
                         # Q-Function accurate -> bootstrap to critic
 
@@ -225,7 +235,10 @@ class IESAC(SAC):
                         dist[curr_dones.bool().flatten()] = -1
                         dist[~curr_dones.bool().flatten()] = step
                         bootstrap_distance[ends_this_step] = dist
-                        bootstrap_states = th.cat((bootstrap_states, next_obs[~curr_dones.bool()]), dim=0)
+                        if bootstrap_states is None:
+                            bootstrap_states = next_obs[~curr_dones.bool(), None]
+                        else:
+                            bootstrap_states = th.cat((bootstrap_states, next_obs[~curr_dones.bool(), None]), dim=0)
 
                         # Increase count for these indices if we use a counted replay buffer
                         if isinstance(self.replay_buffer, CountedReplayBuffer):
@@ -241,7 +254,10 @@ class IESAC(SAC):
                         dones = new_data.dones
                         idxs = new_data.idxs
 
-                        _, traj_log_prob = self.actor.action_log_prob(new_data.observations)
+                        if not self.bootstrap_overwrite_func:
+                            _, traj_log_prob = self.actor.action_log_prob(new_data.observations)
+                        else:
+                            traj_log_prob = self.bootstrap_overwrite_func(self, new_data.observations)
                         # Add discounted reward to target and continue
                         target_q_values[needs_next_step] += (self.gamma ** step *
                                                              (rewards - ent_coef * traj_log_prob.reshape(-1, 1))).squeeze()
