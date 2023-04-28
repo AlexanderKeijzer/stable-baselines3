@@ -190,7 +190,7 @@ class IESAC(SAC):
                                 log_prob_target = th.quantile(det_log_prob, bootrap_perc)
 
                             # Is entropy too high in the current step batch index
-                            batch_next_step = (det_log_prob < log_prob_target) & ~dones.flatten().bool()
+                            batch_next_step = (det_log_prob <= log_prob_target) & ~dones.flatten().bool()
 
                             # Is entropy too high in the initial batch index
                             ends_this_step.zero_()
